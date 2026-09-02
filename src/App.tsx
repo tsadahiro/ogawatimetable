@@ -1,126 +1,247 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
-import type { Session } from '@supabase/supabase-js'
+import type { Session } from "@supabase/supabase-js";
 
-//type Click = {
-//  id: number;
-//  created_at: string ;
-//};
+import {
+  AppBar,
+  Box,
+  Toolbar,
+  Tabs,
+  Tab,
+  Typography,
+  List,
+  ListItem,
+  ListItemText,
+  Button,
+} from "@mui/material";
 
-//async function remove(id:number){
-//  console.log(id);
-//  const { error } = await supabase
-//    .from("click").delete().eq("id", id);
-//  if(error){
-//    console.log(error);
-//  }
-//  return;
-//}
+import PresentationEdit from "./components/PresentationEdit";
+
+type Presentation = {
+  id: number;
+  owner: string;
+  title: string;
+  abstract: string;
+};
 
 export default function App() {
-  //const [items, setItems] = useState<Click[]>([]);
-  const [session, setSession] = useState<Session | null>(null)
+  const [session, setSession] = useState<Session | null>(null);
+  const [items, setItems] = useState<Presentation[]>([]);
+  const [page, setPage] = useState(0);
 
   async function signInWithGoogle() {
     const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
+      provider: "google",
       options: {
-	redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${window.location.origin}/auth/callback`,
       },
-    })
-    if (error) console.error(error)
+    });
+
+    if (error) {
+      console.error(error);
+    }
   }
-  
+
+  async function signOut() {
+    await supabase.auth.signOut();
+  }
+
+  async function load() {
+    const { data, error } = await supabase
+      .from("presentation")
+      .select("*")
+      .order("id");
+
+    if (error) {
+      console.error("load error:", error);
+      return;
+    }
+
+    console.log("loaded presentations:", data);
+
+    setItems((data ?? []) as Presentation[]);
+  }
+
   useEffect(() => {
-    //async function load() {
-    //  const { data, error } = await supabase
-    //    .from("click")
-    //    .select("*")
-    //    .order("id");
-    //
-    //  if (!error) setItems(data ?? []);
-    //}
-    //
-    //load();
+    load();
 
-    //const channel = supabase
-    //  .channel("click-changes")
-    //  .on(
-    //    "postgres_changes",
-    //    {
-    //      event: "*",
-    //      schema: "public",
-    //      table: "click",
-    //    },
-    //    (payload) => {
-    //      if (payload.eventType === "INSERT") {
-    //        setItems((prev) => [...prev, payload.new as Click]);
-    //      }
-    //
-    //      if (payload.eventType === "UPDATE") {
-    //        setItems((prev) =>
-    //          prev.map((item) =>
-    //            item.id === payload.new.id
-    //              ? (payload.new as Click)
-    //              : item
-    //          )
-    //        );
-    //      }
-    //
-    //      if (payload.eventType === "DELETE") {
-    //        setItems((prev) =>
-    //          prev.filter((item) => item.id !== payload.old.id)
-    //        );
-    //      }
-    //    }
-    //  )
-    //  .subscribe((status) => {
-    //	console.log("Realtime status:", status);
-    //  });
-
-    // 初回読み込み時に現在のセッションを取得
+    // 現在のログイン状態
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-    })
+      setSession(session);
+    });
 
-    // セッションの変化を監視(ログイン/ログアウト時)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session)
-      }
-    )
+    // ログイン状態の変化
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
 
-    return () => subscription.unsubscribe()
+    // presentation テーブルの Realtime
+    const channel = supabase
+      .channel("presentation-changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "presentation",
+        },
+        (payload) => {
+          console.log("REALTIME EVENT:", payload);
+
+          if (payload.eventType === "INSERT") {
+            const newItem = payload.new as Presentation;
+
+            setItems((prev) => {
+              // 二重登録防止
+              const exists = prev.some(
+                (item) => String(item.id) === String(newItem.id)
+              );
+
+              if (exists) {
+                return prev;
+              }
+
+              return [...prev, newItem].sort((a, b) => a.id - b.id);
+            });
+          }
+
+          if (payload.eventType === "UPDATE") {
+            const newItem = payload.new as Presentation;
+
+            setItems((prev) =>
+              prev.map((item) =>
+                String(item.id) === String(newItem.id)
+                  ? newItem
+                  : item
+              )
+            );
+          }
+
+          if (payload.eventType === "DELETE") {
+            setItems((prev) =>
+              prev.filter(
+                (item) =>
+                  String(item.id) !== String(payload.old.id)
+              )
+            );
+          }
+        }
+      )
+      .subscribe((status, error) => {
+        console.log("Realtime status:", status);
+
+        if (error) {
+          console.error("Realtime error:", error);
+        }
+      });
+
+    return () => {
+      subscription.unsubscribe();
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-
   if (!session) {
-    return <button onClick={signInWithGoogle}>Googleでログイン</button>
+    return (
+      <Box sx={{ p: 4 }}>
+        <Button
+          variant="contained"
+          onClick={signInWithGoogle}
+        >
+          Googleでログイン
+        </Button>
+      </Box>
+    );
   }
 
-  return <div>ようこそ、{session.user.email} さん</div>
+  return (
+    <Box>
+      <AppBar position="static">
+        <Toolbar>
+          <Typography
+            variant="h6"
+            sx={{ mr: 4 }}
+          >
+            Presentation
+          </Typography>
 
-  //return (
-  //  <div>
-  //    <h1>Click</h1>
-  //
-  //    {items.map((item) => (
-  //      <div key={item.id}>
-  //	  <button onClick={()=>remove(item.id)} > delete </button>
-  //	  {item.id}{item.created_at}
-  //	</div>
-  //    ))}
-  //
-  //  <button
-  //    onClick={async () => {
-  //	const { error } = await supabase
-  //	  .from("click")
-  //	  .insert({});
-  //	if (error) console.error(error);
-  //    }}
-  //  >
-  //    Insert click
-  //  </button>
-  //  </div>
-  //);
+          <Tabs
+            value={page}
+            onChange={(_, newValue) =>
+              setPage(newValue)
+            }
+            textColor="inherit"
+            indicatorColor="secondary"
+          >
+            <Tab label="一覧" />
+            <Tab label="編集" />
+          </Tabs>
+
+          <Box sx={{ flexGrow: 1 }} />
+
+          <Button
+            color="inherit"
+            onClick={signOut}
+          >
+            ログアウト
+          </Button>
+        </Toolbar>
+      </AppBar>
+
+      <Box sx={{ p: 2 }}>
+        <Typography
+          variant="body2"
+          sx={{ mb: 2 }}
+        >
+          ようこそ、{session.user.email} さん
+        </Typography>
+
+        {page === 0 && (
+          <PresentationList items={items} />
+        )}
+
+        {page === 1 && (
+          <PresentationEdit onSaved={load} />
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function PresentationList({
+  items,
+}: {
+  items: Presentation[];
+}) {
+  return (
+    <List>
+      {items.map((item) => (
+        <ListItem
+          key={item.id}
+          divider
+        >
+          <ListItemText
+            primary={
+              item.title || "(タイトル未入力)"
+            }
+            secondary={
+              <>
+                {item.owner}
+                <br />
+                {item.abstract
+                  ? item.abstract.slice(0, 30)
+                  : ""}
+                {item.abstract &&
+                item.abstract.length > 30
+                  ? "..."
+                  : ""}
+              </>
+            }
+          />
+        </ListItem>
+      ))}
+    </List>
+  );
 }
